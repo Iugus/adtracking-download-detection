@@ -1,0 +1,201 @@
+---
+title: "Projeto1 DataScienceAcademy"
+author: "Igor Guerato Garbo"
+date: "11/07/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Projeto 1 Data Science Academy
+
+Analise Preditiva de downloads por click de anuncio
+
+este projeto sera documentado conforme etapas abaixo
+
+##Etapa 1 - Carregando datasets Necessarios
+```{r packages}
+library(tidyverse)
+library(data.table)
+library(lubridate)
+```
+
+## Etapa 2 - Carregando Dataset Completo
+
+
+```{r DataSet}
+inicial_Data<- fread("train.csv")
+```
+
+
+##Etapa 4 - Realizando Amostragem do Dataset
+
+A amostragem foi realizada de forma a aproveitar todos os dados de download possiveis e equilibrar estes dados de forma a evitar resultadois inviesados
+```{r sampling}
+numero.downloads <- nrow(inicial_Data[is_attributed == 1,])
+indices.download <- inicial_Data[,.I[is_attributed == 1]]
+indices.negativo <- sample(inicial_Data[is_attributed == 0,.I],size = numero.downloads)
+WorkData<- inicial_Data[c(indices.download,indices.negativo)]
+rm(inicial_Data)
+
+```
+
+##Etapa 5 - Semparando dados de treino e teste
+
+```{r splitdata}
+Train_rows <- sample(1:nrow(WorkData),nrow(WorkData)*0.7)
+Train_Data <- WorkData[Train_rows,]
+Test_Data <- WorkData[-Train_rows,]
+```
+
+## Etapa 6 - Analise Exploratoria e transformacoes iniciais
+
+```{r exploratori}
+str(Train_Data)
+max(WorkData$click_time)
+min(WorkData$click_time)
+table(lapply(Train_Data,is.na(Train_Data))
+```
+
+Verifica-se que composicao de datas nao eh suficiente para realizar uma variacao mensal ou semanal do dataset para tanto nao sera necessario criar novos dados para considerar mudancas de epoca no dataset
+
+```{r variables_transformatios}
+Changing_types <- function(dt){
+fatores <- c("app","device","os","channel","is_attributed")
+Char <- c("ip")
+dt[,fatores] <- dt[,lapply(.SD,as.factor), .SDcols = fatores]
+dt[,Char] <- dt[,lapply(.SD,as.character), .SDcols = Char]
+return(dt)
+}
+
+Train_Data<-Changing_types(Train_Data)
+Test_Data<-Changing_types(Test_Data)
+
+Adding_dates_columns <- function(df){df %>%
+  mutate(Hour = hour(click_time),
+         day = day(click_time))
+  }
+
+Train_Data <-Adding_dates_columns(Train_Data)
+Test_Data <-Adding_dates_columns(Test_Data)
+```
+
+##Etapa 7 -  Analise exploratoria das variaveis resultantes
+
+```{r graphicanalisis}
+lapply(colnames(Train_Data),function(x){
+  if(unlist(Train_Data[,lapply(.SD,is.factor),.SDcols = c(x)])){
+    ggplot(Train_Data, aes_string(x)) +
+      geom_bar()+
+      facet_grid(. ~ is_attributed)+
+      ggtitle(paste("Relacao de Downloads por ",x))
+  }
+})
+```
+
+Vemos que pela grande quantidade de fatores fica dificil retirar informacoes que facilitem a analise mas consegue-se perceber a consistencia de que aparelhos, os e apps que possuem mais cliques tambem possuem maior numero de downloads.
+
+
+
+```{r graphicanalisis}
+Resumo <- Train_Data %>%
+  count(Hour  ,day,is_attributed)
+
+Ddays <- unique(Resumo$day)
+
+
+tms.plot <- function(Ddays){
+  ggplot(Resumo[Resumo$day == Ddays,], aes(x = Hour, y= n, group = is_attributed, color = is_attributed))+
+    geom_line() +
+    ylab("Quantidade de cliques")+
+    labs(title = paste("cliques no Dia ", as.character(Ddays),sep = ""))+
+    theme(text = element_text(size = 20))
+}
+
+lapply(Ddays, tms.plot)
+```
+
+Vemos que em alguns dias e horarios possuimos maior quantidade de downloads por cliques o que representa uma importancia nos horarios dos cliques para previsao de possiveis downloads
+
+para verificar se existe alguma discrepancia em relacao a taxa de downloads por dia verificamos a quantidade de cliques que resultaram em possiveis downloads 
+```{r graphicanalisis}
+ggplot(Train_Data, aes(x = day))+
+  geom_bar() +
+  ylab("Quantidade de Cliques")+
+  facet_grid(. ~ is_attributed)+
+  labs(title = paste("cliques ao dia"))
+
+```
+
+aparentemente nao existe nenhuma tendencia aparente de que exista uma taxa maior de downloads em algum dos dias estudados
+
+##Etapa 8 - Treinamento do modelo
+
+para realizar o treinamento originalmente foram selecionados tres tipos de modelos, Naive Bayes, SVM e KNN
+```{r modeltraining}
+library(e1071)
+library(kernlab)
+library(kknn)
+
+modelo1_naive <- naiveBayes(is_attributed ~ . -attributed_time, data = Train_Data)
+
+predicao1 <- predict(modelo1_naive, Train_Data[,c(1:6,9:10)])
+
+Tabela1 <- table(predicao1,Train_Data$is_attributed)
+
+Tabela1[1,2]
+
+Calc_Perf_measures <-function(table1,measure){
+  tp <- table1[1,1]
+  tf <- table1[2,2]
+  fp <- table1[2,1]
+  fn <- table1[1,2]
+  if (measure == "accuracy") {
+    accuracy <- (tp+tf)/(tp+tf+fp+fn)
+    return(accuracy)
+  } else {
+    if (measure == "recall") {
+      recall <- tp/(tp+fn)
+      return(recall)
+    } else {
+      if (measure == "precision") {
+        precision <- tp/(tp+fp)
+        return(precision)
+      } else {
+        if (measure == "fscore") {
+          fscore <- 2*tp/(2*tp+fp+fn)
+          return(f-score)
+        } else {
+          if (measure == "all") {
+            fscore <- 2*tp/(2*tp+fp+fn)
+            precision <- tp/(tp+fp)
+            recall <- tp/(tp+fn) 
+            accuracy <- (tp+tf)/(tp+tf+fp+fn)
+            calc_perf <- c(accuracy, recall, precision, fscore)
+            names(calc_perf)<- c("accuracy", "recall", "precision", "fscore")
+            return(calc_perf)
+          }
+        }
+        
+      }
+      
+    }
+
+  }
+}
+
+Calc_Perf_measures(Tabela1,"all")
+```
+
+foi observado que o algoritmo naive bayes parece ter boa accuracia e f-score para tanto foi selecionado como algoritmo para teste, os outros dois algoritmos nao puderam ser implantados devido a alocarem quantidade incomeun de memoria tendo mensagem de que o vetor alocado teria 295 Gbs de memoria
+```{r testresults}
+predicao_test <- predict(modelo1_naive, Test_Data[,c(1:6,9:10)])
+
+tabela_test1 <- table(predicao_test,Test_Data$is_attributed)
+
+Calc_Perf_measures(tabela_test1,"all")
+```
+
+foram obtidos boms resultados para utilizacao inicial do algoritmo para predizer possiveis downloads
